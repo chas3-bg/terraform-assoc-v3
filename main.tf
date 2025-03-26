@@ -25,8 +25,22 @@ data "aws_ami" "fedora41" {
 resource "aws_instance" "test_server" {
   ami           = data.aws_ami.fedora41.id
   instance_type = "t2.micro"
+  availability_zone = "eu-west-1a"
 
   tags = {
     Name = "Test server"
   }
+}
+
+resource "aws_ebs_volume" "data" {
+  availability_zone = "eu-west-1a"
+  size              = 1
+  encrypted         = true
+  type              = "gp3"
+}
+
+resource "aws_volume_attachment" "ebs_attach" {
+  device_name = "/dev/sdb"
+  volume_id   = aws_ebs_volume.data.id
+  instance_id = aws_instance.test_server.id
 }
