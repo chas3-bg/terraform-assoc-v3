@@ -1,4 +1,10 @@
 terraform {
+  cloud {
+    organization = "terraform-v3-exam"
+    workspaces {
+      name = "master"
+    }
+  }
   required_providers {
     aws = {
       source  = "hashicorp/aws"
