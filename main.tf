@@ -54,6 +54,8 @@ resource "aws_autoscaling_group" "app_servers" {
   min_size = 2
   max_size = 10
   availability_zones = data.aws_availability_zones.all.names
+  load_balancers = aws_elb.terraform-v3-elb.name
+  health_check_type = "ELB"
 
   tag {
     key = "name"
@@ -82,4 +84,44 @@ resource "aws_security_group" "defaultsg" {
 
 }
 
-#TODO: LB
+resource "aws_security_group" "elb-sg" {
+  name = "elb-terraform-v3-sg"
+
+  ingress {
+    from_port = 80
+    to_port = 80
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress  {
+    from_port = 0
+    to_port = 0
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
+}
+
+resource "aws_elb" "terraform-v3-elb" {
+  name = "elb-terraform-v3"
+  availability_zones = [data.aws_availability_zones.all.names]
+  listener {
+    lb_port = 80
+    lb_protocol = "http"
+    instance_port = var.app_port
+    instance_protocol = "http"
+  }
+
+  health_check {
+    healthy_threshold = 2
+    unhealthy_threshold = 2
+    timeout = 3
+    interval = 30
+    target = "HTTP:${var.app_port}/"
+  }
+  
+}
+output "elb-pub-dns" {
+  value = aws_elb.terraform-v3-elb.dns_name
+}
