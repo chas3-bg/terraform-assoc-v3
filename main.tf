@@ -1,4 +1,11 @@
+
 terraform {
+  cloud {
+    organization = "terraform-v3-exam"
+    workspaces {
+      name = "master"
+    }
+  }
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -10,24 +17,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "eu-central-1"
-}
-
-variable "port" {
-  description = "Port for the application"
-  type = number
-  default = 8080
-  
-}
-
-
-output "PublicIP" {
-  value = aws_instance.test_server.public_ip 
-}
-
-output "PublicDNS" {
-  value = aws_instance.test_server.public_dns
-  
+  region = "eu-west-1"
 }
 
 data "aws_ami" "fedora41" {
@@ -39,56 +29,106 @@ data "aws_ami" "fedora41" {
   }
 }
 
-resource "aws_instance" "test_server" {
-  ami               = data.aws_ami.fedora41.id
-  instance_type     = "t2.micro"
-  availability_zone = "eu-central-1a"
-  vpc_security_group_ids = ["aws_security_group.defaultsg.id"]
+data "aws_availability_zones" "all" {}
+
+variable "app_port" {
+  default = 8080
+  
+}
+
+variable "allow_all" {
+  default = "0.0.0.0/0"
+  
+}
+resource "aws_launch_configuration" "test_server" {
+  image_id           = data.aws_ami.fedora41.id
+  instance_type = "t2.micro"
+  security_groups = ["aws_security_group.defaultsg.id"]
 
   user_data = <<-EOF
               #!/bin/bash
               echo "Hello from terraformed server" > index.html
-              nohup busibox httpd -f -p "${var.port}" &
+              nohup busybox httpd -f -p "${var.app_port}"
               EOF
-
-  tags = {
-    Name = "Test server"
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
-resource "aws_security_group" "defaultsg" {
-  name        = "defaultSG"
-  description = "Allow 8080/tcp"
 
+resource "aws_autoscaling_group" "app_servers" {
+  launch_configuration = aws_launch_configuration.test_server.id
+  min_size = 2
+  max_size = 10
+  availability_zones = data.aws_availability_zones.all.names
+  load_balancers = aws_elb.terraform-v3-elb.name
+  health_check_type = "ELB"
+
+  tag {
+    key = "name"
+    value = "terraform v3"
+    propagate_at_launch = true
+  }
+  
+}
+resource "aws_security_group" "defaultsg" {
+  name        = "defaultsg"
 
   ingress {
     description = "TLS from VPC"
-    from_port   = var.port
-    to_port     = var.port
+    from_port   = var.app_port
+    to_port     = var.app_port
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.allow_all
   }
 
   egress {
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = [var.allow_all]
   }
 
 }
 
+resource "aws_security_group" "elb-sg" {
+  name = "elb-terraform-v3-sg"
 
+  ingress {
+    from_port = 80
+    to_port = 80
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
 
-resource "aws_ebs_volume" "data" {
-  availability_zone = "eu-central-1a"
-  size              = 1
-  encrypted         = true
-  type              = "gp3"
+  egress  {
+    from_port = 0
+    to_port = 0
+    protocol = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  
 }
 
-resource "aws_volume_attachment" "ebs_attach" {
-  device_name = "/dev/sdb"
-  volume_id   = aws_ebs_volume.data.id
-  instance_id = aws_instance.test_server.id
+resource "aws_elb" "terraform-v3-elb" {
+  name = "elb-terraform-v3"
+  availability_zones = [data.aws_availability_zones.all.names]
+  listener {
+    lb_port = 80
+    lb_protocol = "http"
+    instance_port = var.app_port
+    instance_protocol = "http"
+  }
+
+  health_check {
+    healthy_threshold = 2
+    unhealthy_threshold = 2
+    timeout = 3
+    interval = 30
+    target = "HTTP:${var.app_port}/"
+  }
+  
+}
+output "elb-pub-dns" {
+  value = aws_elb.terraform-v3-elb.dns_name
 }
